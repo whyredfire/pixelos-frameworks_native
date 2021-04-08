@@ -518,7 +518,7 @@ nsecs_t InputDispatcher::processAnrsLocked() {
     connection->responsive = false;
     // Stop waking up for this unresponsive connection
     mAnrTracker.eraseToken(connection->inputChannel->getConnectionToken());
-    onAnrLocked(*connection);
+    onAnrLocked(connection);
     return LONG_LONG_MIN;
 }
 
@@ -591,7 +591,7 @@ void InputDispatcher::dispatchOnceInnerLocked(nsecs_t* nextWakeupTime) {
 
         // Poke user activity for this event.
         if (mPendingEvent->policyFlags & POLICY_FLAG_PASS_TO_USER) {
-            pokeUserActivityLocked(mPendingEvent);
+            pokeUserActivityLocked(*mPendingEvent);
         }
     }
 
@@ -1344,7 +1344,7 @@ void InputDispatcher::dispatchEventLocked(nsecs_t currentTime, EventEntry* event
 
     ALOG_ASSERT(eventEntry->dispatchInProgress); // should already have been set to true
 
-    pokeUserActivityLocked(eventEntry);
+    pokeUserActivityLocked(*eventEntry);
 
     for (const InputTarget& inputTarget : inputTargets) {
         sp<Connection> connection =
@@ -2151,12 +2151,12 @@ std::string InputDispatcher::getApplicationWindowLabel(
     }
 }
 
-void InputDispatcher::pokeUserActivityLocked(const EventEntry* eventEntry) {
-    if (eventEntry->type == EventEntry::Type::FOCUS) {
+void InputDispatcher::pokeUserActivityLocked(const EventEntry& eventEntry) {
+    if (eventEntry.type == EventEntry::Type::FOCUS) {
         // Focus events are passed to apps, but do not represent user activity.
         return;
     }
-    int32_t displayId = getTargetDisplayId(*eventEntry);
+    int32_t displayId = getTargetDisplayId(eventEntry);
     sp<InputWindowHandle> focusedWindowHandle =
             getValueByKey(mFocusedWindowHandlesByDisplay, displayId);
     if (focusedWindowHandle != nullptr) {
@@ -2170,21 +2170,21 @@ void InputDispatcher::pokeUserActivityLocked(const EventEntry* eventEntry) {
     }
 
     int32_t eventType = USER_ACTIVITY_EVENT_OTHER;
-    switch (eventEntry->type) {
+    switch (eventEntry.type) {
         case EventEntry::Type::MOTION: {
-            const MotionEntry* motionEntry = static_cast<const MotionEntry*>(eventEntry);
-            if (motionEntry->action == AMOTION_EVENT_ACTION_CANCEL) {
+            const MotionEntry& motionEntry = static_cast<const MotionEntry&>(eventEntry);
+            if (motionEntry.action == AMOTION_EVENT_ACTION_CANCEL) {
                 return;
             }
 
-            if (MotionEvent::isTouchEvent(motionEntry->source, motionEntry->action)) {
+            if (MotionEvent::isTouchEvent(motionEntry.source, motionEntry.action)) {
                 eventType = USER_ACTIVITY_EVENT_TOUCH;
             }
             break;
         }
         case EventEntry::Type::KEY: {
-            const KeyEntry* keyEntry = static_cast<const KeyEntry*>(eventEntry);
-            if (keyEntry->flags & AKEY_EVENT_FLAG_CANCELED) {
+            const KeyEntry& keyEntry = static_cast<const KeyEntry&>(eventEntry);
+            if (keyEntry.flags & AKEY_EVENT_FLAG_CANCELED) {
                 return;
             }
             eventType = USER_ACTIVITY_EVENT_BUTTON;
@@ -2194,20 +2194,15 @@ void InputDispatcher::pokeUserActivityLocked(const EventEntry* eventEntry) {
         case EventEntry::Type::CONFIGURATION_CHANGED:
         case EventEntry::Type::DEVICE_RESET: {
             LOG_ALWAYS_FATAL("%s events are not user activity",
-                             EventEntry::typeToString(eventEntry->type));
+                             EventEntry::typeToString(eventEntry.type));
             break;
         }
     }
 
     std::unique_ptr<CommandEntry> commandEntry =
             std::make_unique<CommandEntry>(&InputDispatcher::doPokeUserActivityLockedInterruptible);
-    commandEntry->eventTime = eventEntry->eventTime;
+    commandEntry->eventTime = eventEntry.eventTime;
     commandEntry->userActivityEventType = eventType;
-    if (eventType == USER_ACTIVITY_EVENT_BUTTON) {
-        const KeyEntry* keyEntry = static_cast<const KeyEntry*>(eventEntry);
-        commandEntry->keyEntry = const_cast<KeyEntry*>(keyEntry);
-        keyEntry->refCount += 1;
-    }
     postCommandLocked(std::move(commandEntry));
 }
 
@@ -3750,7 +3745,6 @@ void InputDispatcher::setInputWindowsLocked(
                       newFocusedWindowHandle->getName().c_str(), displayId);
             }
             mFocusedWindowHandlesByDisplay[displayId] = newFocusedWindowHandle;
-	    resetNoFocusedWindowTimeoutLocked();
             enqueueFocusEventLocked(*newFocusedWindowHandle, true /*hasFocus*/);
         }
 
@@ -4548,12 +4542,12 @@ void InputDispatcher::onFocusChangedLocked(const sp<InputWindowHandle>& oldFocus
     postCommandLocked(std::move(commandEntry));
 }
 
-void InputDispatcher::onAnrLocked(const Connection& connection) {
+void InputDispatcher::onAnrLocked(const sp<Connection>& connection) {
     // Since we are allowing the policy to extend the timeout, maybe the waitQueue
     // is already healthy again. Don't raise ANR in this situation
-    if (connection.waitQueue.empty()) {
+    if (connection->waitQueue.empty()) {
         ALOGI("Not raising ANR because the connection %s has recovered",
-              connection.inputChannel->getName().c_str());
+              connection->inputChannel->getName().c_str());
         return;
     }
     /**
@@ -4564,21 +4558,21 @@ void InputDispatcher::onAnrLocked(const Connection& connection) {
      * processes the events linearly. So providing information about the oldest entry seems to be
      * most useful.
      */
-    DispatchEntry* oldestEntry = *connection.waitQueue.begin();
+    DispatchEntry* oldestEntry = *connection->waitQueue.begin();
     const nsecs_t currentWait = now() - oldestEntry->deliveryTime;
     std::string reason =
             android::base::StringPrintf("%s is not responding. Waited %" PRId64 "ms for %s",
-                                        connection.inputChannel->getName().c_str(),
+                                        connection->inputChannel->getName().c_str(),
                                         ns2ms(currentWait),
                                         oldestEntry->eventEntry->getDescription().c_str());
 
-    updateLastAnrStateLocked(getWindowHandleLocked(connection.inputChannel->getConnectionToken()),
+    updateLastAnrStateLocked(getWindowHandleLocked(connection->inputChannel->getConnectionToken()),
                              reason);
 
     std::unique_ptr<CommandEntry> commandEntry =
             std::make_unique<CommandEntry>(&InputDispatcher::doNotifyAnrLockedInterruptible);
     commandEntry->inputApplicationHandle = nullptr;
-    commandEntry->inputChannel = connection.inputChannel;
+    commandEntry->inputChannel = connection->inputChannel;
     commandEntry->reason = std::move(reason);
     postCommandLocked(std::move(commandEntry));
 }
@@ -4678,15 +4672,15 @@ void InputDispatcher::doNotifyAnrLockedInterruptible(CommandEntry* commandEntry)
 void InputDispatcher::extendAnrTimeoutsLocked(const sp<InputApplicationHandle>& application,
                                               const sp<IBinder>& connectionToken,
                                               nsecs_t timeoutExtension) {
-    if (connectionToken == nullptr && application != nullptr) {
-        // The ANR happened because there's no focused window
-        mNoFocusedWindowTimeoutTime = now() + timeoutExtension;
-        mAwaitedFocusedApplication = application;
-    }
-
     sp<Connection> connection = getConnectionLocked(connectionToken);
     if (connection == nullptr) {
-        // It's possible that the connection already disappeared. No action necessary.
+        if (mNoFocusedWindowTimeoutTime.has_value() && application != nullptr) {
+            // Maybe ANR happened because there's no focused window?
+            mNoFocusedWindowTimeoutTime = now() + timeoutExtension;
+            mAwaitedFocusedApplication = application;
+        } else {
+            // It's also possible that the connection already disappeared. No action necessary.
+        }
         return;
     }
 
@@ -4998,20 +4992,7 @@ bool InputDispatcher::afterMotionEventLockedInterruptible(const sp<Connection>& 
 void InputDispatcher::doPokeUserActivityLockedInterruptible(CommandEntry* commandEntry) {
     mLock.unlock();
 
-    int32_t keyCode = AKEYCODE_UNKNOWN;
-
-    if (commandEntry->userActivityEventType == USER_ACTIVITY_EVENT_BUTTON &&
-            commandEntry->keyEntry) {
-        keyCode = commandEntry->keyEntry->keyCode;
-    }
-
-    mPolicy->pokeUserActivity(commandEntry->eventTime, commandEntry->userActivityEventType,
-            keyCode);
-
-    if (commandEntry->userActivityEventType == USER_ACTIVITY_EVENT_BUTTON &&
-            commandEntry->keyEntry) {
-        commandEntry->keyEntry->release();
-    }
+    mPolicy->pokeUserActivity(commandEntry->eventTime, commandEntry->userActivityEventType);
 
     mLock.lock();
 }

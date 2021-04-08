@@ -411,7 +411,7 @@ private:
     void addGlobalMonitoringTargetsLocked(std::vector<InputTarget>& inputTargets, int32_t displayId,
                                           float xOffset = 0, float yOffset = 0) REQUIRES(mLock);
 
-    void pokeUserActivityLocked(const EventEntry* eventEntry) REQUIRES(mLock);
+    void pokeUserActivityLocked(const EventEntry& eventEntry) REQUIRES(mLock);
     bool checkInjectionPermission(const sp<InputWindowHandle>& windowHandle,
                                   const InjectionState* injectionState);
     bool isWindowObscuredAtPointLocked(const sp<InputWindowHandle>& windowHandle, int32_t x,
@@ -489,7 +489,7 @@ private:
             REQUIRES(mLock);
     void onFocusChangedLocked(const sp<InputWindowHandle>& oldFocus,
                               const sp<InputWindowHandle>& newFocus) REQUIRES(mLock);
-    void onAnrLocked(const Connection& connection) REQUIRES(mLock);
+    void onAnrLocked(const sp<Connection>& connection) REQUIRES(mLock);
     void onAnrLocked(const sp<InputApplicationHandle>& application) REQUIRES(mLock);
     void updateLastAnrStateLocked(const sp<InputWindowHandle>& window, const std::string& reason)
             REQUIRES(mLock);
